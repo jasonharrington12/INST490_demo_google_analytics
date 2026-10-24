@@ -26,7 +26,7 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
 GA4_PROPERTY_ID = "153293282"
 
 # Set to True for live demonstration using synthetic data without active credentials
-USE_DEMO_MODE = False  
+USE_DEMO_MODE = True  
 
 # Custom Styling
 st.markdown("""
