@@ -23,7 +23,7 @@ st.set_page_config(
 
 # Set path to your Service Account JSON key (for local execution)
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
-GA4_PROPERTY_ID = "YOUR_PROPERTY_ID"  # Replace with your 9-digit numeric GA4 Property ID
+GA4_PROPERTY_ID = "153293282"
 
 # Set to True for live demonstration using synthetic data without active credentials
 USE_DEMO_MODE = False  
