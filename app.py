@@ -22,10 +22,10 @@ st.set_page_config(
     layout="wide",
 )
 
-GA4_PROPERTY_ID = "153293282"  # Replace with your 9-digit numeric GA4 Property ID
-USE_DEMO_MODE = True  # Set to True to use synthetic mock data without API credentials
+GA4_PROPERTY_ID = "153293282"  # Google Merchandise Store GA4 Demo Property ID
+USE_DEMO_MODE = False  # Set to True to use synthetic mock data without active credentials
 
-# Custom CSS Styling
+# Custom Styling
 st.markdown("""
     <style>
     .main { padding-top: 1rem; }
@@ -110,9 +110,10 @@ report_type = st.sidebar.radio(
     list(REPORTS_CONFIG.keys()) + ["Custom Query Builder"]
 )
 
+# Date Slider - Changing this now invalidates cache and updates data dynamically
 days_range = st.sidebar.slider("Date Window (Days)", 7, 90, 28)
 
-# Option 1 Channel Filter Setup
+# Channel Filters
 all_channels = [
     "Organic Search",
     "Direct",
@@ -142,24 +143,27 @@ traffic_segments = st.sidebar.multiselect(
 )
 
 # ==============================================================================
-# DATA ENGINE PIPELINE
+# DYNAMIC DATA ENGINE PIPELINE
 # ==============================================================================
+# `days` is explicitly placed FIRST so cache updates when slider moves
 @st.cache_data(ttl=3600)
-def run_dynamic_ga4_report(dim_names, metric_names, days, demo_mode=False):
+def run_dynamic_ga4_report(days, dim_names, metric_names, demo_mode=False):
     if demo_mode:
-        np.random.seed(42)
+        np.random.seed(days)  # Seed changes dynamically with date slider
         rows = []
         for i in range(10):
             d_vals = [f"Item_{i+1}" if "Path" in d or "Name" in d else "Organic Search" for d in dim_names]
-            m_vals = [np.random.randint(100, 5000) for _ in metric_names]
+            # Multiply by days factor so metrics scale up when date window expands
+            m_vals = [int(np.random.randint(50, 300) * (days / 7)) for _ in metric_names]
             rows.append(d_vals + m_vals)
         return pd.DataFrame(rows, columns=dim_names + metric_names)
 
+    # Dynamic date range formatting tied directly to slider input
     request = RunReportRequest(
         property=f"properties/{GA4_PROPERTY_ID}",
         dimensions=[Dimension(name=d) for d in dim_names],
         metrics=[Metric(name=m) for m in metric_names],
-        date_ranges=[DateRange(start_date=f"{days}daysAgo", end_date="today")],
+        date_ranges=[DateRange(start_date=f"{int(days)}daysAgo", end_date="today")],
     )
     
     response = client.run_report(request)
@@ -185,9 +189,16 @@ st.title(f"📊 {report_type}")
 try:
     if report_type != "Custom Query Builder":
         config = REPORTS_CONFIG[report_type]
-        df = run_dynamic_ga4_report(config["dimensions"], config["metrics"], days_range, demo_mode=USE_DEMO_MODE)
         
-        # Apply Channel Filter if the primary dimension contains channel groups
+        # Pass days_range as FIRST argument to ensure slider triggers fresh API calls
+        df = run_dynamic_ga4_report(
+            days_range, 
+            config["dimensions"], 
+            config["metrics"], 
+            demo_mode=USE_DEMO_MODE
+        )
+        
+        # Channel Filter Check
         primary_dim = config["dimensions"][0]
         if primary_dim in ["firstUserPrimaryChannelGroup", "sessionDefaultChannelGroup"]:
             if traffic_segments:
@@ -195,7 +206,7 @@ try:
             else:
                 df = df.iloc[0:0]
 
-        # Top Metric Cards
+        # Top Metric KPI Summary Cards
         cols = st.columns(len(config["metrics"]))
         for idx, m in enumerate(config["metrics"]):
             total_val = df[m].sum() if not df.empty else 0
@@ -205,7 +216,7 @@ try:
         
         col_chart, col_table = st.columns([1.5, 1])
         
-        # Visual Chart
+        # Chart Visualization
         with col_chart:
             st.subheader("Visual Analysis")
             if df.empty:
@@ -222,7 +233,7 @@ try:
                 fig.update_layout(yaxis=dict(autorange="reversed"))
                 st.plotly_chart(fig, use_container_width=True)
             
-        # Data Table
+        # Raw Data Table
         with col_table:
             st.subheader("Raw Data Table")
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -246,7 +257,12 @@ try:
             )
             
         if custom_dims and custom_mets:
-            custom_df = run_dynamic_ga4_report(custom_dims, custom_mets, days_range, demo_mode=USE_DEMO_MODE)
+            custom_df = run_dynamic_ga4_report(
+                days_range, 
+                custom_dims, 
+                custom_mets, 
+                demo_mode=USE_DEMO_MODE
+            )
             st.dataframe(custom_df, use_container_width=True)
             
             fig_custom = px.bar(
