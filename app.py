@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
@@ -16,15 +17,15 @@ from google.analytics.data_v1beta.types import (
 # CONFIGURATION & PAGE SETUP
 # ==============================================================================
 st.set_page_config(
-    page_title="GA4 Analytics Studio",
+    page_title="Universal GA4 Analytics Studio",
     page_icon="📊",
     layout="wide",
 )
 
-GA4_PROPERTY_ID = "153293282"  # Replace with your 9-digit numeric GA4 Property ID
-USE_DEMO_MODE = False  # Set to True to force synthetic mock data without API credentials
+GA4_PROPERTY_ID = "153293282"  # Google Merchandise Store GA4 Demo Property ID
+USE_DEMO_MODE = False  # Set to True to use synthetic mock data without active credentials
 
-# Custom CSS Styling
+# Custom Styling
 st.markdown("""
     <style>
     .main { padding-top: 1rem; }
@@ -52,99 +53,67 @@ def get_ga4_client():
         return BetaAnalyticsDataClient()
     
     else:
-        # Fall back gracefully to demo mode if no credentials exist
-        return None
+        st.error("No Google Analytics credentials found. Configure Streamlit Secrets or add credentials.json locally.")
+        st.stop()
 
 client = get_ga4_client()
 
 # ==============================================================================
-# GA4 UI NAVIGATION & API SCHEMA MAPPING
+# PRE-BUILT REPORTS CONFIGURATION
 # ==============================================================================
-GA4_NAVIGATION = {
-    "Reports snapshot": {
-        "dimensions": ["date"],
-        "metrics": ["activeUsers", "screenPageViews", "conversions"],
+REPORTS_CONFIG = {
+    "User Acquisition": {
+        "dimensions": ["firstUserPrimaryChannelGroup"],
+        "metrics": ["newUsers", "sessions", "conversions"],
+        "primary_metric": "newUsers",
+        "chart_type": "bar"
+    },
+    "Traffic Acquisition": {
+        "dimensions": ["sessionDefaultChannelGroup"],
+        "metrics": ["sessions", "activeUsers", "conversions"],
+        "primary_metric": "sessions",
+        "chart_type": "pie"
+    },
+    "Engagement (Pages & Screens)": {
+        "dimensions": ["pagePath"],
+        "metrics": ["screenPageViews", "activeUsers", "averageSessionDuration", "bounceRate"],
+        "primary_metric": "screenPageViews",
+        "chart_type": "bar"
+    },
+    "Events": {
+        "dimensions": ["eventName"],
+        "metrics": ["eventCount", "activeUsers"],
+        "primary_metric": "eventCount",
+        "chart_type": "bar"
+    },
+    "Ecommerce / Monetization": {
+        "dimensions": ["itemName"],
+        "metrics": ["itemRevenue", "itemsPurchased", "itemsViewed"],
+        "primary_metric": "itemRevenue",
+        "chart_type": "bar"
+    },
+    "Demographics (Countries)": {
+        "dimensions": ["country"],
+        "metrics": ["activeUsers", "sessions", "conversions"],
         "primary_metric": "activeUsers",
-        "chart_type": "line"
-    },
-    "Acquisition": {
-        "User acquisition": {
-            "dimensions": ["firstUserPrimaryChannelGroup"],
-            "metrics": ["newUsers", "sessions", "conversions"],
-            "primary_metric": "newUsers",
-            "chart_type": "bar"
-        },
-        "Traffic acquisition": {
-            "dimensions": ["sessionDefaultChannelGroup"],
-            "metrics": ["sessions", "activeUsers", "conversions"],
-            "primary_metric": "sessions",
-            "chart_type": "pie"
-        }
-    },
-    "Engagement": {
-        "Pages and screens": {
-            "dimensions": ["pagePath"],
-            "metrics": ["screenPageViews", "activeUsers", "averageSessionDuration", "bounceRate"],
-            "primary_metric": "screenPageViews",
-            "chart_type": "bar"
-        },
-        "Events": {
-            "dimensions": ["eventName"],
-            "metrics": ["eventCount", "activeUsers"],
-            "primary_metric": "eventCount",
-            "chart_type": "bar"
-        }
-    },
-    "Monetization": {
-        "Ecommerce purchases": {
-            "dimensions": ["itemName"],
-            "metrics": ["itemRevenue", "itemsPurchased", "itemsViewed"],
-            "primary_metric": "itemRevenue",
-            "chart_type": "bar"
-        }
-    },
-    "Demographics": {
-        "Demographic details": {
-            "dimensions": ["country"],
-            "metrics": ["activeUsers", "sessions", "conversions"],
-            "primary_metric": "activeUsers",
-            "chart_type": "map"
-        }
-    },
-    "Tech": {
-        "Tech details": {
-            "dimensions": ["deviceCategory"],
-            "metrics": ["activeUsers", "sessions"],
-            "primary_metric": "activeUsers",
-            "chart_type": "pie"
-        }
+        "chart_type": "map"
     }
 }
 
 # ==============================================================================
-# SIDEBAR NAVIGATION CONTROLS
+# SIDEBAR CONTROLS & NAVIGATION
 # ==============================================================================
-st.sidebar.title("📌 Analytics Navigation")
+st.sidebar.title("📌 Navigation")
 
-# Primary Category Selectbox
-category = st.sidebar.selectbox("Category", list(GA4_NAVIGATION.keys()) + ["Custom Query Builder"])
+report_type = st.sidebar.radio(
+    "Select Report View",
+    list(REPORTS_CONFIG.keys()) + ["Custom Query Builder"]
+)
 
-# Handle Nested Sub-Tabs
-if category == "Reports snapshot":
-    selected_report_config = GA4_NAVIGATION["Reports snapshot"]
-    report_title = "Reports snapshot"
-elif category == "Custom Query Builder":
-    selected_report_config = None
-    report_title = "Custom Query Builder"
-else:
-    sub_tab = st.sidebar.radio("Report Tab", list(GA4_NAVIGATION[category].keys()))
-    selected_report_config = GA4_NAVIGATION[category][sub_tab]
-    report_title = sub_tab
-
-# Dynamic Date Slider
+# Date Slider - Changing this now invalidates cache and updates data dynamically
 days_range = st.sidebar.slider("Date Window (Days)", 7, 90, 28)
 
-# Optional Channel Filters
+# Channel Filters
 all_channels = [
     "Organic Search",
     "Direct",
@@ -176,35 +145,20 @@ traffic_segments = st.sidebar.multiselect(
 # ==============================================================================
 # DYNAMIC DATA ENGINE PIPELINE
 # ==============================================================================
+# `days` is explicitly placed FIRST so cache updates when slider moves
 @st.cache_data(ttl=3600)
 def run_dynamic_ga4_report(days, dim_names, metric_names, demo_mode=False):
-    # Fall back to synthetic data if client is None or demo_mode is True
-    if demo_mode or client is None:
-        np.random.seed(int(days))
+    if demo_mode:
+        np.random.seed(days)  # Seed changes dynamically with date slider
         rows = []
-        sample_countries = [
-            "United States", "India", "United Kingdom", "Canada", 
-            "Germany", "France", "Japan", "Australia", "Brazil", "Mexico"
-        ]
-        
         for i in range(10):
-            d_vals = []
-            for d in dim_names:
-                if "country" in d:
-                    d_vals.append(sample_countries[i % len(sample_countries)])
-                elif "Path" in d or "Name" in d:
-                    d_vals.append(f"/page-{i+1}")
-                elif "date" in d:
-                    d_vals.append(pd.Timestamp.today().strftime("%Y-%m-%d"))
-                else:
-                    d_vals.append("Organic Search")
-                    
+            d_vals = [f"Item_{i+1}" if "Path" in d or "Name" in d else "Organic Search" for d in dim_names]
+            # Multiply by days factor so metrics scale up when date window expands
             m_vals = [int(np.random.randint(50, 300) * (days / 7)) for _ in metric_names]
             rows.append(d_vals + m_vals)
-            
         return pd.DataFrame(rows, columns=dim_names + metric_names)
 
-    # Real GA4 Data API Call
+    # Dynamic date range formatting tied directly to slider input
     request = RunReportRequest(
         property=f"properties/{GA4_PROPERTY_ID}",
         dimensions=[Dimension(name=d) for d in dim_names],
@@ -228,30 +182,33 @@ def run_dynamic_ga4_report(days, dim_names, metric_names, demo_mode=False):
     return df
 
 # ==============================================================================
-# DASHBOARD RENDERING ENGINE
+# DASHBOARD RENDERING
 # ==============================================================================
-st.title(f"📊 {report_title}")
+st.title(f"📊 {report_type}")
 
 try:
-    if category != "Custom Query Builder":
+    if report_type != "Custom Query Builder":
+        config = REPORTS_CONFIG[report_type]
+        
+        # Pass days_range as FIRST argument to ensure slider triggers fresh API calls
         df = run_dynamic_ga4_report(
             days_range, 
-            selected_report_config["dimensions"], 
-            selected_report_config["metrics"], 
+            config["dimensions"], 
+            config["metrics"], 
             demo_mode=USE_DEMO_MODE
         )
         
-        # Apply Channel Filter if the primary dimension is channel-based
-        primary_dim = selected_report_config["dimensions"][0]
+        # Channel Filter Check
+        primary_dim = config["dimensions"][0]
         if primary_dim in ["firstUserPrimaryChannelGroup", "sessionDefaultChannelGroup"]:
             if traffic_segments:
                 df = df[df[primary_dim].isin(traffic_segments)]
             else:
                 df = df.iloc[0:0]
 
-        # Metric KPI Summary Cards
-        cols = st.columns(len(selected_report_config["metrics"]))
-        for idx, m in enumerate(selected_report_config["metrics"]):
+        # Top Metric KPI Summary Cards
+        cols = st.columns(len(config["metrics"]))
+        for idx, m in enumerate(config["metrics"]):
             total_val = df[m].sum() if not df.empty else 0
             cols[idx].metric(m, f"{total_val:,.2f}" if isinstance(total_val, float) else f"{total_val:,}")
             
@@ -259,23 +216,20 @@ try:
         
         col_chart, col_table = st.columns([1.5, 1])
         
-        # Dynamic Visualizations
+        # Chart Visualization
         with col_chart:
             st.subheader("Visual Analysis")
             if df.empty:
                 st.info("No data available for the selected filters.")
-            elif selected_report_config["chart_type"] == "line":
-                fig = px.line(df, x=primary_dim, y=selected_report_config["primary_metric"])
+            elif config["chart_type"] == "pie":
+                fig = px.pie(df, names=primary_dim, values=config["primary_metric"], hole=0.4)
                 st.plotly_chart(fig, use_container_width=True)
-            elif selected_report_config["chart_type"] == "pie":
-                fig = px.pie(df, names=primary_dim, values=selected_report_config["primary_metric"], hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
-            elif selected_report_config["chart_type"] == "map":
-                fig = px.choropleth(df, locations=primary_dim, locationmode="country names", color=selected_report_config["primary_metric"])
+            elif config["chart_type"] == "map":
+                fig = px.choropleth(df, locations=primary_dim, locationmode="country names", color=config["primary_metric"])
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                sorted_df = df.sort_values(by=selected_report_config["primary_metric"], ascending=False).head(10)
-                fig = px.bar(sorted_df, x=selected_report_config["primary_metric"], y=primary_dim, orientation="h")
+                sorted_df = df.sort_values(by=config["primary_metric"], ascending=False).head(10)
+                fig = px.bar(sorted_df, x=config["primary_metric"], y=primary_dim, orientation="h")
                 fig.update_layout(yaxis=dict(autorange="reversed"))
                 st.plotly_chart(fig, use_container_width=True)
             
@@ -286,7 +240,7 @@ try:
 
     # Custom Query Builder View
     else:
-        st.subheader("🛠️ Custom Query Builder")
+        st.subheader("🛠️ Build Your Own Custom GA4 Report")
         
         col_d, col_m = st.columns(2)
         with col_d:
