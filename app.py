@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 GA4_PROPERTY_ID = "153293282"  # Google Merchandise Store GA4 Demo Property ID
-USE_DEMO_MODE = False  # Set to True to use synthetic mock data without active credentials
+USE_DEMO_MODE = True  # Set to True to use synthetic mock data without active credentials
 
 # Custom Styling
 st.markdown("""
